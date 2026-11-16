@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import xml.etree.ElementTree as ET
 from typing import Any
 
 import requests
@@ -12,6 +14,21 @@ from urllib3.util.retry import Retry
 from src.config import AppConfig, EndpointConfig
 
 logger = logging.getLogger(__name__)
+
+
+def parse_api_payload(raw_text: str) -> list[dict[str, Any]]:
+    """Parse JSON directly or unwrap ASP.NET ASMX <string>...</string> XML responses."""
+    text = raw_text.lstrip("\ufeff \t\r\n")
+    if text.startswith("<"):
+        root = ET.fromstring(text)
+        inner = root.text or "[]"
+        payload = json.loads(inner)
+    else:
+        payload = json.loads(text)
+
+    if not isinstance(payload, list):
+        raise ValueError(f"Expected JSON list from API, got {type(payload).__name__}")
+    return payload
 
 
 def build_session(user_agent: str) -> requests.Session:
@@ -59,10 +76,10 @@ def fetch_period(
                 "pagina": str(pagina),
                 "tamanho": str(tamanho),
             }
+            for key, value in endpoint.fixed_params:
+                params[key] = value
             if endpoint.requires_month:
-                if mes is None:
-                    raise ValueError(f"Endpoint {endpoint.name} requires 'mes'.")
-                params["mes"] = str(mes)
+                params["mes"] = str(mes) if mes is not None else "00"
 
             logger.info(
                 "Fetching %s (%s) page=%d size=%d",
@@ -74,11 +91,7 @@ def fetch_period(
             resp = client.get(url, params=params, timeout=config.request_timeout_sec)
             resp.raise_for_status()
 
-            payload = resp.json()
-            if not isinstance(payload, list):
-                raise ValueError(
-                    f"Expected JSON list from {url}, got {type(payload).__name__}"
-                )
+            payload = parse_api_payload(resp.text)
 
             all_rows.extend(payload)
             logger.info(

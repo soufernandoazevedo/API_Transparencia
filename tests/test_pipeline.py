@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import types
 import unittest
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
@@ -37,7 +39,7 @@ except ModuleNotFoundError:
     sys.modules["urllib3.util.retry"] = retry_mod
 
 from src.config import ENDPOINTS, AppConfig
-from src.extractor import fetch_period
+from src.extractor import fetch_period, parse_api_payload
 from src.main import resolve_previous_month
 from src.transformer import normalize_batch
 
@@ -149,6 +151,32 @@ class TestTransformer(unittest.TestCase):
         self.assertNotIn("mes_ref", row)
         self.assertEqual(row["valor"], "9000")
 
+    def test_normalizes_full_year_empenhos_parses_mes_ref_from_mes_string(self) -> None:
+        sample = [
+            {
+                "ano": "2026",
+                "mes": "11 - Novembro",
+                "unidade_gestora": "PREFEITURA MUNICIPAL DE SANTOS",
+                "data": "2026-11-03T00:00:00",
+                "especie": "Original",
+                "empenho": "00017484/2026",
+                "tipo_empenho": "Estimativo",
+                "elemento_despesa": "33903996000",
+                "subtitulo": None,
+                "funcao": "08 - ASSISTÊNCIA SOCIAL",
+                "subfuncao": "122 - ADMINISTRAÇÃO GERAL",
+                "programa": "0073",
+                "fonte_recurso": "01-5100000",
+                "grupo_despesa": "33000000000",
+                "documento_favorecido": "***.759.168-**",
+                "nome_favorecido": "MARGARETT SAMARA SOARES ",
+                "valor": 8000.0,
+            }
+        ]
+        rows = normalize_batch(sample, ENDPOINTS["empenhos"], ano_ref=2026, mes_ref=None)
+        self.assertEqual(rows[0]["mes_ref"], 11)
+        self.assertEqual(rows[0]["nome_favorecido"], "MARGARETT SAMARA SOARES")
+
 
 class TestExtractorPagination(unittest.TestCase):
     def test_stops_when_page_smaller_than_page_size(self) -> None:
@@ -156,9 +184,9 @@ class TestExtractorPagination(unittest.TestCase):
         session = MagicMock()
 
         resp1 = MagicMock()
-        resp1.json.return_value = [{"id": 1}, {"id": 2}]
+        resp1.text = '[{"id": 1}, {"id": 2}]'
         resp2 = MagicMock()
-        resp2.json.return_value = [{"id": 3}]
+        resp2.text = '[{"id": 3}]'
         session.get.side_effect = [resp1, resp2]
 
         rows = fetch_period(ENDPOINTS["empenhos"], 2026, 11, config, session=session)
@@ -170,7 +198,7 @@ class TestExtractorPagination(unittest.TestCase):
         session = MagicMock()
 
         resp = MagicMock()
-        resp.json.return_value = [{"ano": "2026"}]
+        resp.text = '[{"ano": "2026"}]'
         session.get.return_value = resp
 
         rows = fetch_period(ENDPOINTS["orcamento_despesas"], 2026, None, config, session=session)
@@ -178,6 +206,43 @@ class TestExtractorPagination(unittest.TestCase):
         _, kwargs = session.get.call_args
         self.assertNotIn("mes", kwargs["params"])
         self.assertEqual(kwargs["params"]["ano"], "2026")
+
+    def test_unwraps_asmx_xml_string_json(self) -> None:
+        xml_body = '<?xml version="1.0" encoding="utf-8"?>\r\n<string xmlns="http://tempuri.org/">[{"ano":"2026","valor":10.5}]</string>'
+        rows = parse_api_payload(xml_body)
+        self.assertEqual(rows, [{"ano": "2026", "valor": 10.5}])
+
+    def test_monthly_endpoint_uses_mes_00_for_full_year_backfill(self) -> None:
+        config = AppConfig(page_size=1000)
+        session = MagicMock()
+
+        resp = MagicMock()
+        resp.text = '[{"ano": "2025", "mes": "1 - Janeiro"}]'
+        session.get.return_value = resp
+
+        rows = fetch_period(ENDPOINTS["empenhos"], 2025, None, config, session=session)
+        self.assertEqual(len(rows), 1)
+        _, kwargs = session.get.call_args
+        self.assertEqual(kwargs["params"]["mes"], "00")
+
+
+class TestLocalOutput(unittest.TestCase):
+    def test_writes_local_json_without_bigquery(self) -> None:
+        from unittest.mock import patch
+        from src.main import run_pipeline
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("src.main.fetch_period", return_value=[{"ano": "2025", "valor": 10.0}]):
+                summary = run_pipeline(
+                    years=[2025],
+                    month=None,
+                    endpoint_names=["orcamento_despesas"],
+                    config=AppConfig(),
+                    local_only=True,
+                    output_dir=Path(tmpdir),
+                )
+            self.assertEqual(summary, {"orcamento_despesas:2025": 1})
+            self.assertTrue((Path(tmpdir) / "orcamento_despesas_2025.json").exists())
 
 
 class TestPreviousMonth(unittest.TestCase):

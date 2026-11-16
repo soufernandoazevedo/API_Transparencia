@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from google.cloud import bigquery
@@ -42,17 +44,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Target exercise year (defaults to previous month's year).",
     )
     parser.add_argument(
+        "--years",
+        type=int,
+        nargs="+",
+        default=None,
+        help="One or more full years to backfill (e.g., --years 2024 2025 2026).",
+    )
+    parser.add_argument(
         "--month",
         type=int,
         default=int(os.getenv("TARGET_MONTH")) if os.getenv("TARGET_MONTH") else None,
-        help="Target exercise month 1-12 (defaults to previous month).",
+        help="Target exercise month 1-12 (defaults to previous month; omitted when --years is used).",
     )
     parser.add_argument(
         "--endpoints",
         nargs="+",
         choices=list(ENDPOINTS.keys()),
         default=list(ENDPOINTS.keys()),
-        help="Subset of endpoints to process (default: all 4).",
+        help="Subset of endpoints to process (default: all 6).",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Optional directory to save normalized JSON files locally.",
+    )
+    parser.add_argument(
+        "--local-only",
+        action="store_true",
+        help="Skip BigQuery load (useful with --output-dir for local downloads).",
     )
     parser.add_argument(
         "--dry-run",
@@ -62,70 +82,117 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def run_pipeline(
+def _write_local_json(
+    output_dir: Path,
+    endpoint_name: str,
     year: int,
-    month: int,
+    month: int | None,
+    rows: list[dict],
+) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    suffix = f"{year:04d}_{month:02d}" if month is not None else f"{year:04d}"
+    out_path = output_dir / f"{endpoint_name}_{suffix}.json"
+    with out_path.open("w", encoding="utf-8") as fh:
+        json.dump(rows, fh, ensure_ascii=False, indent=2)
+    logger.info("Saved %d rows to %s", len(rows), out_path)
+    return out_path
+
+
+def run_pipeline(
+    years: list[int],
+    month: int | None,
     endpoint_names: list[str],
     config: AppConfig,
     dry_run: bool = False,
+    local_only: bool = False,
+    output_dir: Path | None = None,
 ) -> dict[str, int]:
-    """Run extraction, normalization, and BigQuery load for all requested endpoints."""
-    if not 1 <= month <= 12:
+    """Run extraction, normalization, optional local JSON export, and BigQuery load."""
+    if month is not None and not 1 <= month <= 12:
         raise ValueError(f"Month must be between 1 and 12, got {month}")
 
-    if not dry_run and not config.gcp_project_id:
-        raise ValueError("GCP_PROJECT_ID environment variable is required unless --dry-run is set.")
+    skip_bq = dry_run or local_only
+    if not skip_bq and not config.gcp_project_id:
+        raise ValueError("GCP_PROJECT_ID environment variable is required unless --dry-run or --local-only is set.")
 
-    bq_client = None if dry_run else bigquery.Client(project=config.gcp_project_id)
+    bq_client = None if skip_bq else bigquery.Client(project=config.gcp_project_id)
     results: dict[str, int] = {}
 
     with build_session(config.user_agent) as session:
-        for name in endpoint_names:
-            endpoint = ENDPOINTS[name]
-            target_month = month if endpoint.requires_month else None
-            raw_rows = fetch_period(endpoint, year, target_month, config, session=session)
-            normalized_rows = normalize_batch(raw_rows, endpoint, year, target_month)
+        for year in years:
+            for name in endpoint_names:
+                endpoint = ENDPOINTS[name]
+                target_month = month if endpoint.requires_month else None
+                period_label = (
+                    f"{year:04d}-{target_month:02d}"
+                    if target_month is not None
+                    else f"{year:04d}"
+                )
 
-            if dry_run:
-                period_label = f"{year:04d}-{month:02d}" if endpoint.requires_month else f"{year:04d}"
-                logger.info(
-                    "[DRY RUN] %s (%s): %d normalized rows",
-                    name,
-                    period_label,
-                    len(normalized_rows),
-                )
-                results[name] = len(normalized_rows)
-            else:
-                assert bq_client is not None
-                loaded = replace_period_data(
-                    bq_client, config, endpoint, normalized_rows, year, target_month
-                )
-                results[name] = loaded
+                raw_rows = fetch_period(endpoint, year, target_month, config, session=session)
+                normalized_rows = normalize_batch(raw_rows, endpoint, year, target_month)
+
+                if output_dir is not None:
+                    _write_local_json(output_dir, name, year, target_month, normalized_rows)
+
+                key = f"{name}:{period_label}"
+                if skip_bq:
+                    logger.info(
+                        "[%s] %s (%s): %d normalized rows",
+                        "DRY RUN" if dry_run else "LOCAL ONLY",
+                        name,
+                        period_label,
+                        len(normalized_rows),
+                    )
+                    results[key] = len(normalized_rows)
+                else:
+                    assert bq_client is not None
+                    loaded = replace_period_data(
+                        bq_client, config, endpoint, normalized_rows, year, target_month
+                    )
+                    results[key] = loaded
 
     return results
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    default_year, default_month = resolve_previous_month()
-    year = args.year if args.year is not None else default_year
-    month = args.month if args.month is not None else default_month
+    if args.years and args.year is not None:
+        logger.error("Use either --year or --years, not both.")
+        return 2
+
+    if args.years:
+        years = args.years
+        month = None
+    else:
+        default_year, default_month = resolve_previous_month()
+        years = [args.year if args.year is not None else default_year]
+        month = args.month if args.month is not None else default_month
 
     config = AppConfig()
     logger.info(
-        "Starting Santos Transparency ETL for %04d-%02d (endpoints=%s, dry_run=%s)",
-        year,
+        "Starting Santos Transparency ETL for years=%s month=%s (endpoints=%s, dry_run=%s, local_only=%s)",
+        years,
         month,
         ",".join(args.endpoints),
         args.dry_run,
+        args.local_only,
     )
 
     try:
-        summary = run_pipeline(year, month, args.endpoints, config, dry_run=args.dry_run)
+        summary = run_pipeline(
+            years=years,
+            month=month,
+            endpoint_names=args.endpoints,
+            config=config,
+            dry_run=args.dry_run,
+            local_only=args.local_only,
+            output_dir=args.output_dir,
+        )
         logger.info("ETL completed successfully: %s", summary)
         return 0
     except Exception:
-        logger.exception("ETL failed for %04d-%02d", year, month)
+        logger.exception("ETL failed for years=%s month=%s", years, month)
         return 1
 
 

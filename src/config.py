@@ -17,6 +17,7 @@ class EndpointConfig:
     numeric_fields: tuple[str, ...]
     date_fields: tuple[str, ...] = ("data",)
     requires_month: bool = True
+    fixed_params: tuple[tuple[str, str], ...] = ()
     clustering_fields: tuple[str, ...] = ("ano_ref", "mes_ref", "unidade_gestora")
 
     @property
@@ -44,6 +45,8 @@ ENDPOINTS: dict[str, EndpointConfig] = {
             "origem",
         ),
         numeric_fields=("valor_previsto", "valor_realizado"),
+        requires_month=False,
+        fixed_params=(("mes", "00"),),
     ),
     "empenhos": EndpointConfig(
         name="empenhos",

@@ -50,8 +50,12 @@ def normalize_record(
         "ano_ref": ano_ref,
         "ingested_at": ts.isoformat(),
     }
-    if endpoint.requires_month:
+    if mes_ref is not None:
         normalized["mes_ref"] = mes_ref
+    elif "mes" in endpoint.string_fields and raw.get("mes") is not None:
+        raw_mes = str(raw["mes"]).strip().split()[0]
+        if raw_mes.isdigit():
+            normalized["mes_ref"] = int(raw_mes)
 
     for field_name in endpoint.string_fields:
         normalized[field_name] = _clean_str(raw.get(field_name))

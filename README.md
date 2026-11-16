@@ -1,6 +1,6 @@
-# Transparência Santos → BigQuery → Looker Studio
+# Transparência Santos → BigQuery → Data Studio
 
-Pipeline automatizado em Python para extrair mensalmente **Receitas** e **Despesas** (`empenhos`, `liquidacoes` e `pagamentos`) da API do Portal da Transparência de Santos-SP, carregar de forma idempotente no **Google BigQuery** e alimentar relatórios no **Looker Studio** (antigo Google Data Studio).
+Pipeline automatizado em Python para extrair mensalmente **Receitas**, **Despesas** (`empenhos`, `liquidacoes` e `pagamentos`) e **Orçamento** (`orcamento_receitas` e `orcamento_despesas`) da API do Portal da Transparência de Santos-SP, carregar de forma idempotente no **Google BigQuery** e alimentar relatórios no **Google Data Studio**.
 
 ## Estrutura do projeto
 
@@ -12,18 +12,23 @@ Pipeline automatizado em Python para extrair mensalmente **Receitas** e **Despes
 - `sql/views_looker_studio.sql`: Views prontas (`vw_receitas_mensal`, `vw_despesas_fases_mensal`, `vw_balanco_mensal`) para conectar no Looker Studio.
 - `Dockerfile`: Imagem leve para execução como **Cloud Run Job**.
 
-## 1. Teste local (Dry Run)
+## 1. Teste local, download e carga histórica (2024, 2025, 2026)
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Testa extração + normalização sem gravar no BigQuery
-python -m src.main --year 2026 --month 10 --dry-run
-```
+# Baixa e salva todos os 6 datasets de 2024, 2025 e 2026 localmente em data/ (sem BigQuery)
+python -m src.main --years 2024 2025 2026 --output-dir data --local-only
 
-> **Atenção:** caso o portal retorne `403 Forbidden` a partir de algum IP de nuvem ou User-Agent, valide primeiro o `--dry-run` no seu ambiente ou ajuste `HTTP_USER_AGENT` via variável de ambiente.
+# Ou envia direto para o BigQuery (carga histórica de anos fechados + 2026 até o momento):
+export GCP_PROJECT_ID="SEU_PROJETO_GCP"
+python -m src.main --years 2024 2025 2026
+
+# Atualização mensal pontual (ex.: outubro/2026):
+python -m src.main --year 2026 --month 10
+```
 
 ## 2. Deploy na nuvem (Cloud Run Jobs + Cloud Scheduler)
 
@@ -103,10 +108,10 @@ gcloud scheduler jobs create http "${JOB_NAME}-mensal" \
   --project "$PROJECT_ID"
 ```
 
-## 3. Views e conexão com o Looker Studio
+## 3. Views e conexão com o Data Studio
 
 1. Após a primeira execução do job, abra `sql/views_looker_studio.sql`, substitua `SEU_PROJETO` pelo seu `PROJECT_ID` e execute no **BigQuery Console**.
-2. No [Looker Studio](https://lookerstudio.google.com/):
+2. No **Google Data Studio**:
    - **Criar → Fonte de dados → BigQuery**.
    - Selecione seu projeto → dataset `transparencia_santos` → `vw_balanco_mensal` (e/ou `vw_receitas_mensal` e `vw_despesas_fases_mensal`).
    - Monte os gráficos (série temporal por `competencia`, filtros por `unidade_gestora`, `funcao`, `fonte_recurso`, `fase`).

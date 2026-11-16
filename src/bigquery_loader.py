@@ -18,8 +18,8 @@ def build_bq_schema(endpoint: EndpointConfig) -> list[bigquery.SchemaField]:
     fields: list[bigquery.SchemaField] = [
         bigquery.SchemaField("ano_ref", "INT64", mode="REQUIRED"),
     ]
-    if endpoint.requires_month:
-        fields.append(bigquery.SchemaField("mes_ref", "INT64", mode="REQUIRED"))
+    if endpoint.requires_month or "mes" in endpoint.string_fields:
+        fields.append(bigquery.SchemaField("mes_ref", "INT64", mode="NULLABLE" if not endpoint.requires_month else "REQUIRED"))
     fields.append(bigquery.SchemaField("ingested_at", "TIMESTAMP", mode="REQUIRED"))
 
     for name in endpoint.string_fields:
@@ -60,9 +60,7 @@ def _period_filter(
     mes_ref: int | None,
 ) -> tuple[str, list[bigquery.ScalarQueryParameter], str]:
     params = [bigquery.ScalarQueryParameter("ano_ref", "INT64", ano_ref)]
-    if endpoint.requires_month:
-        if mes_ref is None:
-            raise ValueError(f"Endpoint {endpoint.name} requires mes_ref.")
+    if endpoint.requires_month and mes_ref is not None:
         params.append(bigquery.ScalarQueryParameter("mes_ref", "INT64", mes_ref))
         return "ano_ref = @ano_ref AND mes_ref = @mes_ref", params, f"{ano_ref:04d}-{mes_ref:02d}"
     return "ano_ref = @ano_ref", params, f"{ano_ref:04d}"
