@@ -129,3 +129,4 @@ gcloud scheduler jobs create http "${JOB_NAME}-mensal" \
 
 - **Ciclo de vida do empenho:** Criar view no BigQuery relacionando `empenhos` → `liquidacoes` → `pagamentos` pelas chaves (`empenho`, `liquidacao`, `unidade_gestora`) para acompanhar em um único lugar toda a vida útil de cada empenho (valor empenhado, liquidado, pago e saldos pendentes).
 - **Suporte a novos portais:** Parametrizar múltiplos portais/municípios além de Santos-SP.
+- **Comentários bilíngues:** Na próxima atualização de código, manter docstrings e comentários em `pt-BR` e `en-US`.
