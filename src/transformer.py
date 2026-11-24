@@ -1,4 +1,4 @@
-"""Record normalization for Santos Transparency Portal payloads."""
+"""Normalização de registros provenientes dos payloads do Portal da Transparência de Santos."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ def _parse_iso_date(value: Any) -> str | None:
     text = str(value).strip()
     if not text:
         return None
-    # Handles formats like "2026-11-03T00:00:00" or "2026-11-03"
+    # Trata formatos como "2026-11-03T00:00:00" ou "2026-11-03"
     return text[:10]
 
 
@@ -31,7 +31,7 @@ def _parse_numeric(value: Any) -> str | None:
         return None
     try:
         dec = Decimal(str(value).strip())
-        # BigQuery NUMERIC supports up to 9 fractional digits.
+        # O tipo NUMERIC do BigQuery suporta até 9 casas decimais.
         return format(dec.quantize(Decimal("0.000000001")).normalize(), "f")
     except (InvalidOperation, ValueError) as exc:
         raise ValueError(f"Invalid numeric value: {value!r}") from exc
@@ -44,7 +44,7 @@ def normalize_record(
     mes_ref: int | None = None,
     ingested_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Normalize a single API record according to the endpoint schema."""
+    """Normaliza um único registro da API de acordo com o esquema do endpoint."""
     ts = ingested_at or datetime.now(timezone.utc)
     normalized: dict[str, Any] = {
         "ano_ref": ano_ref,
@@ -75,6 +75,6 @@ def normalize_batch(
     ano_ref: int,
     mes_ref: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Normalize all records in a batch with a shared ingestion timestamp."""
+    """Normaliza todos os registros de um lote com um timestamp de ingestão compartilhado."""
     ts = datetime.now(timezone.utc)
     return [normalize_record(row, endpoint, ano_ref, mes_ref, ts) for row in records]

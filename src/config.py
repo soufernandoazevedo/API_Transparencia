@@ -1,4 +1,4 @@
-"""Configuration and endpoint/schema definitions for Santos Transparency Portal ETL."""
+"""Configurações e definições de endpoints e esquemas do ETL do Portal da Transparência de Santos."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class EndpointConfig:
-    """Declarative specification for a Transparency Portal endpoint and its BigQuery table."""
+    """Especificação declarativa de um endpoint do Portal da Transparência e sua tabela no BigQuery."""
 
     name: str
     api_method: str
@@ -165,7 +165,7 @@ ENDPOINTS: dict[str, EndpointConfig] = {
 
 @dataclass(frozen=True)
 class AppConfig:
-    """Runtime settings loaded from environment variables."""
+    """Configurações de execução carregadas a partir de variáveis de ambiente."""
 
     gcp_project_id: str = field(default_factory=lambda: os.getenv("GCP_PROJECT_ID", ""))
     bq_dataset: str = field(default_factory=lambda: os.getenv("BQ_DATASET", "transparencia_santos"))

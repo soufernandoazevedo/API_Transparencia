@@ -1,4 +1,4 @@
-"""CLI and Cloud Run Job entrypoint for Santos Transparency Portal ETL."""
+"""Ponto de entrada de CLI e Cloud Run Job para o ETL do Portal da Transparência de Santos."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_previous_month(now: datetime | None = None) -> tuple[int, int]:
-    """Return (year, month) for the previous calendar month in Sao Paulo time."""
+    """Retorna (ano, mês) correspondentes ao mês civil anterior no fuso horário de São Paulo."""
     ref = now or datetime.now(ZoneInfo("America/Sao_Paulo"))
     if ref.month == 1:
         return ref.year - 1, 12
@@ -35,49 +35,49 @@ def resolve_previous_month(now: datetime | None = None) -> tuple[int, int]:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Extract Santos Transparency Portal data and load into BigQuery."
+        description="Extrai dados do Portal da Transparência de Santos e carrega no BigQuery."
     )
     parser.add_argument(
         "--year",
         type=int,
         default=int(os.getenv("TARGET_YEAR")) if os.getenv("TARGET_YEAR") else None,
-        help="Target exercise year (defaults to previous month's year).",
+        help="Ano de exercício alvo (padrão: ano do mês anterior).",
     )
     parser.add_argument(
         "--years",
         type=int,
         nargs="+",
         default=None,
-        help="One or more full years to backfill (e.g., --years 2024 2025 2026).",
+        help="Um ou mais anos completos para carga histórica (ex.: --years 2024 2025 2026).",
     )
     parser.add_argument(
         "--month",
         type=int,
         default=int(os.getenv("TARGET_MONTH")) if os.getenv("TARGET_MONTH") else None,
-        help="Target exercise month 1-12 (defaults to previous month; omitted when --years is used).",
+        help="Mês de exercício alvo de 1 a 12 (padrão: mês anterior; omitido quando --years é usado).",
     )
     parser.add_argument(
         "--endpoints",
         nargs="+",
         choices=list(ENDPOINTS.keys()),
         default=list(ENDPOINTS.keys()),
-        help="Subset of endpoints to process (default: all 6).",
+        help="Subconjunto de endpoints a processar (padrão: todos os 6).",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
-        help="Optional directory to save normalized JSON files locally.",
+        help="Diretório opcional para salvar localmente os arquivos JSON normalizados.",
     )
     parser.add_argument(
         "--local-only",
         action="store_true",
-        help="Skip BigQuery load (useful with --output-dir for local downloads).",
+        help="Ignora a carga no BigQuery (útil com --output-dir para downloads locais).",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Extract and normalize without writing to BigQuery.",
+        help="Extrai e normaliza sem gravar no BigQuery.",
     )
     return parser.parse_args(argv)
 
@@ -107,7 +107,7 @@ def run_pipeline(
     local_only: bool = False,
     output_dir: Path | None = None,
 ) -> dict[str, int]:
-    """Run extraction, normalization, optional local JSON export, and BigQuery load."""
+    """Executa extração, normalização, exportação local opcional em JSON e carga no BigQuery."""
     if month is not None and not 1 <= month <= 12:
         raise ValueError(f"Month must be between 1 and 12, got {month}")
 

@@ -1,4 +1,4 @@
-"""Idempotent BigQuery loader for Santos Transparency Portal data."""
+"""Carregador idempotente no BigQuery para dados do Portal da Transparência de Santos."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def build_bq_schema(endpoint: EndpointConfig) -> list[bigquery.SchemaField]:
-    """Generate the BigQuery table schema from an EndpointConfig."""
+    """Gera o esquema da tabela no BigQuery a partir de um EndpointConfig."""
     fields: list[bigquery.SchemaField] = [
         bigquery.SchemaField("ano_ref", "INT64", mode="REQUIRED"),
     ]
@@ -36,7 +36,7 @@ def ensure_dataset_and_table(
     config: AppConfig,
     endpoint: EndpointConfig,
 ) -> bigquery.TableReference:
-    """Create the dataset and partitioned/clustered target table if they do not exist."""
+    """Cria o dataset e a tabela de destino particionada/clusterizada caso ainda não existam."""
     dataset_ref = bigquery.DatasetReference(config.gcp_project_id, config.bq_dataset)
     dataset = bigquery.Dataset(dataset_ref)
     dataset.location = config.bq_location
@@ -74,7 +74,7 @@ def replace_period_data(
     ano_ref: int,
     mes_ref: int | None = None,
 ) -> int:
-    """Atomically replace all rows for the target period via a temporary staging table."""
+    """Substitui atomicamente todas as linhas do período alvo por meio de uma tabela temporária de staging."""
     target_ref = ensure_dataset_and_table(client, config, endpoint)
     target_fqn = f"`{target_ref.project}.{target_ref.dataset_id}.{target_ref.table_id}`"
     where_clause, query_params, period_label = _period_filter(endpoint, ano_ref, mes_ref)

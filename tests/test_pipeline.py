@@ -1,4 +1,4 @@
-"""Unit tests for Santos Transparency Portal ETL."""
+"""Testes unitários do ETL do Portal da Transparência de Santos."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
-# Allow running unit tests without installing external dependencies locally.
+# Permite executar os testes unitários sem instalar dependências externas localmente.
 if "google.cloud.bigquery" not in sys.modules:
     google_mod = sys.modules.setdefault("google", types.ModuleType("google"))
     cloud_mod = types.ModuleType("google.cloud")
