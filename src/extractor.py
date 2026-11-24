@@ -1,4 +1,4 @@
-"""Paginated HTTP extractor for the Santos Transparency Portal API."""
+"""Extrator HTTP paginado para a API do Portal da Transparência de Santos."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def parse_api_payload(raw_text: str) -> list[dict[str, Any]]:
-    """Parse JSON directly or unwrap ASP.NET ASMX <string>...</string> XML responses."""
+    """Faz o parsing direto de JSON ou desembrulha respostas XML <string>...</string> do ASP.NET ASMX."""
     text = raw_text.lstrip("\ufeff \t\r\n")
     if text.startswith("<"):
         root = ET.fromstring(text)
@@ -32,7 +32,7 @@ def parse_api_payload(raw_text: str) -> list[dict[str, Any]]:
 
 
 def build_session(user_agent: str) -> requests.Session:
-    """Create a requests Session configured with retries and standard headers."""
+    """Cria uma sessão requests configurada com retentativas e cabeçalhos padrão."""
     session = requests.Session()
     retry = Retry(
         total=4,
@@ -59,7 +59,7 @@ def fetch_period(
     config: AppConfig,
     session: requests.Session | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch all pages for a given endpoint, year, and optional month."""
+    """Busca todas as páginas para um endpoint, ano e mês opcional informados."""
     own_session = session is None
     client = session or build_session(config.user_agent)
     url = f"{config.portal_base_url}/{endpoint.api_method}"
