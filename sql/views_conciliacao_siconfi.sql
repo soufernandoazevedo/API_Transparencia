@@ -42,16 +42,32 @@ numerada AS (
     *,
     COUNT(*) OVER (
       PARTITION BY
-        ano_ref, mes_ref, data, unidade_gestora, fonte_recurso, receita, origem,
-        cat_norm, orig_norm, esp_norm, rub_norm, ali_norm, sub_norm,
+        ano_ref, mes_ref, data,
+        TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(unidade_gestora, ''), NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')),
+        TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(fonte_recurso, NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')),
+        TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(receita, ''), NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')),
+        TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(origem, ''), NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')),
+        TRIM(REGEXP_REPLACE(cat_norm, r'[^A-Z0-9]+', ' ')),
+        TRIM(REGEXP_REPLACE(orig_norm, r'[^A-Z0-9]+', ' ')),
+        TRIM(REGEXP_REPLACE(esp_norm, r'[^A-Z0-9]+', ' ')),
+        TRIM(REGEXP_REPLACE(rub_norm, r'[^A-Z0-9]+', ' ')),
+        TRIM(REGEXP_REPLACE(ali_norm, r'[^A-Z0-9]+', ' ')),
         valor_previsto, valor_realizado
     ) AS qtd_copias_api,
     ROW_NUMBER() OVER (
       PARTITION BY
-        ano_ref, mes_ref, data, unidade_gestora, fonte_recurso, receita, origem,
-        cat_norm, orig_norm, esp_norm, rub_norm, ali_norm, sub_norm,
+        ano_ref, mes_ref, data,
+        TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(unidade_gestora, ''), NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')),
+        TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(fonte_recurso, NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')),
+        TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(receita, ''), NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')),
+        TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(origem, ''), NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')),
+        TRIM(REGEXP_REPLACE(cat_norm, r'[^A-Z0-9]+', ' ')),
+        TRIM(REGEXP_REPLACE(orig_norm, r'[^A-Z0-9]+', ' ')),
+        TRIM(REGEXP_REPLACE(esp_norm, r'[^A-Z0-9]+', ' ')),
+        TRIM(REGEXP_REPLACE(rub_norm, r'[^A-Z0-9]+', ' ')),
+        TRIM(REGEXP_REPLACE(ali_norm, r'[^A-Z0-9]+', ' ')),
         valor_previsto, valor_realizado
-      ORDER BY data
+      ORDER BY IF(sub_norm != '', 0, 1), data
     ) AS rn_chave
   FROM base_bruta
 ),

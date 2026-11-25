@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+import re
 from typing import Any
+import unicodedata
 
 from src.config import EndpointConfig
 
@@ -91,7 +93,6 @@ _CAMPOS_CHAVE_RECEITA_GPI: tuple[str, ...] = (
     "especie",
     "rubrica",
     "alinea",
-    "subalinea",
     "fonte_recurso",
     "receita",
     "origem",
@@ -100,12 +101,23 @@ _CAMPOS_CHAVE_RECEITA_GPI: tuple[str, ...] = (
 )
 
 
+def _normalizar_chave_texto(valor: Any) -> Any:
+    """Remove acentos, pontuação divergente ('-' vs '–' vs '?') e espaços múltiplos."""
+    if not isinstance(valor, str):
+        return valor
+    decomposto = unicodedata.normalize("NFKD", valor.replace("\xa0", " "))
+    sem_acentos = "".join(ch for ch in decomposto if not unicodedata.combining(ch)).upper()
+    return re.sub(r"[^A-Z0-9]+", " ", sem_acentos).strip()
+
+
 def _chave_natural_receita_gpi(row: dict[str, Any]) -> tuple[Any, ...]:
-    """Gera chave natural case-insensitive para identificar cópias redundantes em receitas do GPI."""
-    return tuple(
-        row.get(campo).strip().upper() if isinstance(row.get(campo), str) else row.get(campo)
-        for campo in _CAMPOS_CHAVE_RECEITA_GPI
-    )
+    """Gera chave natural normalizada para identificar cópias redundantes em receitas do GPI.
+
+    Omite ``subalinea`` da chave porque cargas duplicadas da API do Portal de Santos
+    emitem cópias idênticas alternando ``subalinea=None`` e ``subalinea`` preenchida,
+    além de variações de caixa, espaços duplos e hífens ('-' vs '–').
+    """
+    return tuple(_normalizar_chave_texto(row.get(campo)) for campo in _CAMPOS_CHAVE_RECEITA_GPI)
 
 
 def deduplicar_receitas_gpi(
@@ -116,8 +128,8 @@ def deduplicar_receitas_gpi(
 
     Para cada grupo ``(ano_ref, data, unidade_gestora)``, calcula a proporção de chaves
     naturais repetidas (case-insensitive). Quando a taxa atinge ``limiar_taxa_duplicidade``
-    (indicando duplicação/triplicação de carga na API), mantém apenas uma linha confiável
-    por chave; em dias limpos, preserva todos os lançamentos originais intactos.
+    (indicando duplicação/triplicação de carga na API), mantém apenas a linha mais completa
+    (priorizando a cópia com ``subalinea`` preenchida); em dias limpos, preserva tudo.
     """
     por_dia_ug: dict[tuple[Any, Any, Any], list[dict[str, Any]]] = defaultdict(list)
     for row in records:
@@ -132,12 +144,13 @@ def deduplicar_receitas_gpi(
         taxa = chaves_repetidas / total_chaves if total_chaves else 0.0
 
         if taxa >= limiar_taxa_duplicidade:
-            vistas: set[tuple[Any, ...]] = set()
+            escolhidas: dict[tuple[Any, ...], dict[str, Any]] = {}
             for r in rows:
                 ch = _chave_natural_receita_gpi(r)
-                if ch not in vistas:
-                    vistas.add(ch)
-                    resultado.append(r)
+                anterior = escolhidas.get(ch)
+                if anterior is None or (not anterior.get("subalinea") and r.get("subalinea")):
+                    escolhidas[ch] = r
+            resultado.extend(escolhidas.values())
         else:
             resultado.extend(rows)
 

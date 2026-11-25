@@ -284,9 +284,24 @@ class TestDeduplicacaoReceitasGpi(unittest.TestCase):
             alinea="- Impostos sobre Serviços",
             subalinea="- Imposto sobre Serviços de Qualquer Natureza - ISSQN",
         )
-        limpas = deduplicar_receitas_gpi([base, dict(base), copia_mixed])
+        copia_sem_sub = dict(base, subalinea=None)
+        limpas = deduplicar_receitas_gpi([copia_sem_sub, dict(copia_sem_sub), copia_mixed])
         self.assertEqual(len(limpas), 1)
         self.assertEqual(limpas[0]["valor_realizado"], "100.50")
+        self.assertEqual(limpas[0]["subalinea"], "- Imposto sobre Serviços de Qualquer Natureza - ISSQN")
+
+    def test_nao_confunde_numero_de_conta_na_subalinea_com_codigo_nr(self) -> None:
+        self.assertIsNone(extrair_codigo_nr("- AP (C) 01047 - AP DRAGAGEM RIO SAO JORGE"))
+        res = classificar_receita_gpi(
+            categoria="- RECEITAS CORRENTES",
+            conta_origem="- RECEITA PATRIMONIAL",
+            especie="- VALORES MOBILIÁRIOS",
+            rubrica="- JUROS E CORREÇÕES MONETÁRIAS",
+            alinea="- REMUNERAÇÃO DE DEPÓSITOS BANCÁRIOS",
+            subalinea="- AP (C) 01047 - AP DRAGAGEM RIO SAO JORGE",
+        )
+        self.assertEqual(res.grupo_gerencial, "Tributárias e Patrimoniais")
+        self.assertEqual(res.tipo_receita, "Valores Mobiliários / Aplicações Financeiras")
 
     def test_preserva_lancamentos_coincidentes_em_dia_limpo(self) -> None:
         from src.transformer import deduplicar_receitas_gpi

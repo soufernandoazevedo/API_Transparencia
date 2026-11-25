@@ -24,7 +24,7 @@ class ClassificacaoReceita:
     eh_intra_orcamentaria: bool
 
 
-_RE_DIGITOS = re.compile(r"\d+")
+_RE_CODIGO_NR_INICIO = re.compile(r"^(?:RO)?\s*([1278](?:\.?\d){3,})\b", re.IGNORECASE)
 _RE_SEPARADOR_INICIAL = re.compile(r"^[\s\-–—]+")
 
 
@@ -42,6 +42,9 @@ def _normalizar_texto(texto: str | None) -> str:
 def extrair_codigo_nr(valor: str | None) -> str | None:
     """Extrai o código de Natureza da Receita (8 dígitos sem pontos) de códigos SICONFI ou textos.
 
+    Aceita apenas códigos iniciados pela categoria oficial (1, 2, 7 ou 8), opcionalmente
+    precedidos por ``RO``, evitando falsos positivos com números de conta/lei no meio do texto.
+
     Exemplos aceitos:
     - ``"11125001"`` -> ``"11125001"``
     - ``"RO1.1.1.2.50.0.0"`` -> ``"11125000"``
@@ -54,15 +57,12 @@ def extrair_codigo_nr(valor: str | None) -> str | None:
     if not texto:
         return None
 
-    # Caso padrão SICONFI DCA: "RO1.1.1.2.50.0.0" ou "RO7.2.1.5.02.0.0"
-    if texto.upper().startswith("RO"):
-        texto = texto[2:].strip()
-
-    # Pega apenas o trecho anterior a " - " quando vier acompanhado de descrição.
     cabecalho = texto.split(" - ", 1)[0].strip()
-    digitos = "".join(_RE_DIGITOS.findall(cabecalho))
-    if len(digitos) < 4:
+    match = _RE_CODIGO_NR_INICIO.match(cabecalho)
+    if not match:
         return None
+
+    digitos = match.group(1).replace(".", "")
     if len(digitos) >= 8:
         return digitos[:8]
     return digitos.ljust(8, "0")
