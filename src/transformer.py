@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -78,3 +79,66 @@ def normalize_batch(
     """Normaliza todos os registros de um lote com um timestamp de ingestão compartilhado."""
     ts = datetime.now(timezone.utc)
     return [normalize_record(row, endpoint, ano_ref, mes_ref, ts) for row in records]
+
+
+_CAMPOS_CHAVE_RECEITA_GPI: tuple[str, ...] = (
+    "ano_ref",
+    "mes_ref",
+    "unidade_gestora",
+    "data",
+    "categoria",
+    "conta_origem",
+    "especie",
+    "rubrica",
+    "alinea",
+    "subalinea",
+    "fonte_recurso",
+    "receita",
+    "origem",
+    "valor_previsto",
+    "valor_realizado",
+)
+
+
+def _chave_natural_receita_gpi(row: dict[str, Any]) -> tuple[Any, ...]:
+    """Gera chave natural case-insensitive para identificar cópias redundantes em receitas do GPI."""
+    return tuple(
+        row.get(campo).strip().upper() if isinstance(row.get(campo), str) else row.get(campo)
+        for campo in _CAMPOS_CHAVE_RECEITA_GPI
+    )
+
+
+def deduplicar_receitas_gpi(
+    records: list[dict[str, Any]],
+    limiar_taxa_duplicidade: float = 0.20,
+) -> list[dict[str, Any]]:
+    """Remove cópias redundantes de dias afetados por carga duplicada na API do GPI.
+
+    Para cada grupo ``(ano_ref, data, unidade_gestora)``, calcula a proporção de chaves
+    naturais repetidas (case-insensitive). Quando a taxa atinge ``limiar_taxa_duplicidade``
+    (indicando duplicação/triplicação de carga na API), mantém apenas uma linha confiável
+    por chave; em dias limpos, preserva todos os lançamentos originais intactos.
+    """
+    por_dia_ug: dict[tuple[Any, Any, Any], list[dict[str, Any]]] = defaultdict(list)
+    for row in records:
+        chave_dia = (row.get("ano_ref"), row.get("data"), row.get("unidade_gestora"))
+        por_dia_ug[chave_dia].append(row)
+
+    resultado: list[dict[str, Any]] = []
+    for rows in por_dia_ug.values():
+        contagem = Counter(_chave_natural_receita_gpi(r) for r in rows)
+        total_chaves = len(contagem)
+        chaves_repetidas = sum(1 for qtd in contagem.values() if qtd > 1)
+        taxa = chaves_repetidas / total_chaves if total_chaves else 0.0
+
+        if taxa >= limiar_taxa_duplicidade:
+            vistas: set[tuple[Any, ...]] = set()
+            for r in rows:
+                ch = _chave_natural_receita_gpi(r)
+                if ch not in vistas:
+                    vistas.add(ch)
+                    resultado.append(r)
+        else:
+            resultado.extend(rows)
+
+    return resultado
