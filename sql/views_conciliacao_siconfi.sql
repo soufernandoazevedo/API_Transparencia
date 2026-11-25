@@ -7,19 +7,25 @@
 
 -- ============================================================================
 -- 1. Receitas Orçamentárias do GPI (E&L) classificadas no padrão MCASP/STN
---    Separa Bruta, Deduções e Líquida para comparação direta com o SICONFI.
---    Exclui receitas Extra-Orçamentárias (que não compõem o balanço orçamentário).
+--    - Separa Bruta, Deduções e Líquida para comparação direta com o SICONFI.
+--    - Exclui receitas Extra-Orçamentárias (que não compõem o balanço orçamentário).
+--    - Deduplicação inteligente orientada por dia/unidade gestora:
+--      quando >= 20% das chaves naturais do dia vêm repetidas (case-insensitive,
+--      sinalizando recarga duplicada/triplicada na API do Portal), mantém apenas
+--      1 linha confiável por chave; em dias limpos (< 20%), preserva todas as linhas.
 -- ============================================================================
 CREATE OR REPLACE VIEW `SEU_PROJETO.transparencia_santos.vw_receitas_gpi_classificadas` AS
-WITH base AS (
+WITH base_bruta AS (
   SELECT
     ano_ref,
     mes_ref,
+    data,
     DATE(ano_ref, mes_ref, 1) AS competencia,
     unidade_gestora,
+    COALESCE(TRIM(fonte_recurso), '') AS fonte_recurso,
     receita,
     origem,
-    -- Remove acentos e prefixos "- " para padronizar a classificação textual do GPI.
+    -- Remove acentos e prefixos "- " para padronizar a classificação textual e a chave natural.
     UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(categoria, ''), NFD), r'\pM|^[\s\-–—]+', '')) AS cat_norm,
     UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(conta_origem, ''), NFD), r'\pM|^[\s\-–—]+', '')) AS orig_norm,
     UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(especie, ''), NFD), r'\pM|^[\s\-–—]+', '')) AS esp_norm,
@@ -30,6 +36,48 @@ WITH base AS (
     valor_realizado
   FROM `SEU_PROJETO.transparencia_santos.receitas`
   WHERE COALESCE(TRIM(receita), '') != 'Extra Orçamentário'
+),
+numerada AS (
+  SELECT
+    *,
+    COUNT(*) OVER (
+      PARTITION BY
+        ano_ref, mes_ref, data, unidade_gestora, fonte_recurso, receita, origem,
+        cat_norm, orig_norm, esp_norm, rub_norm, ali_norm, sub_norm,
+        valor_previsto, valor_realizado
+    ) AS qtd_copias_api,
+    ROW_NUMBER() OVER (
+      PARTITION BY
+        ano_ref, mes_ref, data, unidade_gestora, fonte_recurso, receita, origem,
+        cat_norm, orig_norm, esp_norm, rub_norm, ali_norm, sub_norm,
+        valor_previsto, valor_realizado
+      ORDER BY data
+    ) AS rn_chave
+  FROM base_bruta
+),
+diagnostico_dia AS (
+  SELECT
+    ano_ref,
+    data,
+    unidade_gestora,
+    SAFE_DIVIDE(
+      COUNTIF(rn_chave = 1 AND qtd_copias_api > 1),
+      COUNTIF(rn_chave = 1)
+    ) >= 0.20 AS dia_com_duplicidade_api
+  FROM numerada
+  GROUP BY 1, 2, 3
+),
+base AS (
+  SELECT
+    n.*,
+    COALESCE(d.dia_com_duplicidade_api, FALSE) AS dia_com_duplicidade_api
+  FROM numerada n
+  LEFT JOIN diagnostico_dia d
+    ON n.ano_ref = d.ano_ref
+   AND n.data = d.data
+   AND COALESCE(n.unidade_gestora, '') = COALESCE(d.unidade_gestora, '')
+  WHERE NOT COALESCE(d.dia_com_duplicidade_api, FALSE)
+     OR n.rn_chave = 1
 ),
 enriquecida AS (
   SELECT
@@ -44,6 +92,8 @@ SELECT
   competencia,
   unidade_gestora,
   eh_intra_orcamentaria,
+  dia_com_duplicidade_api,
+  qtd_copias_api,
 
   -- Grupo gerencial (Tributárias e Patrimoniais reunidas conforme demanda)
   CASE

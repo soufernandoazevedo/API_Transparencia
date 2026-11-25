@@ -258,5 +258,67 @@ class TestSiconfiExtractorEPipeline(unittest.TestCase):
             self.assertTrue((Path(tmpdir) / "siconfi_dca_receitas_2025.json").exists())
 
 
+class TestDeduplicacaoReceitasGpi(unittest.TestCase):
+    def test_deduplica_dia_com_carga_triplicada_case_insensitive(self) -> None:
+        from src.transformer import deduplicar_receitas_gpi
+
+        base = {
+            "ano_ref": 2026,
+            "mes_ref": 1,
+            "unidade_gestora": "PREFEITURA MUNICIPAL DE SANTOS",
+            "data": "2026-01-16",
+            "categoria": "- RECEITAS CORRENTES",
+            "conta_origem": "- IMPOSTOS, TAXAS E CONTRIBUIÇÕES DE MELHORIA",
+            "especie": "- IMPOSTOS",
+            "rubrica": "- IMPOSTOS SOBRE A PRODUÇÃO E CIRCULAÇÃO DE MERCADORIAS E SERVIÇOS",
+            "alinea": "- IMPOSTOS SOBRE SERVIÇOS",
+            "subalinea": "- IMPOSTO SOBRE SERVIÇOS DE QUALQUER NATUREZA - ISSQN",
+            "fonte_recurso": "1100000 - GERAL",
+            "receita": "Orçamentário",
+            "origem": "Arrecadação",
+            "valor_previsto": "1462014000",
+            "valor_realizado": "100.50",
+        }
+        copia_mixed = dict(
+            base,
+            alinea="- Impostos sobre Serviços",
+            subalinea="- Imposto sobre Serviços de Qualquer Natureza - ISSQN",
+        )
+        limpas = deduplicar_receitas_gpi([base, dict(base), copia_mixed])
+        self.assertEqual(len(limpas), 1)
+        self.assertEqual(limpas[0]["valor_realizado"], "100.50")
+
+    def test_preserva_lancamentos_coincidentes_em_dia_limpo(self) -> None:
+        from src.transformer import deduplicar_receitas_gpi
+
+        # 9 chaves únicas + 1 chave repetida 2x (taxa = 1/10 = 10% < 20%) -> dia limpo, preserva tudo
+        linhas = []
+        for i in range(1, 10):
+            linhas.append(
+                {
+                    "ano_ref": 2026,
+                    "mes_ref": 6,
+                    "unidade_gestora": "PREFEITURA MUNICIPAL DE SANTOS",
+                    "data": "2026-06-05",
+                    "categoria": "- RECEITAS CORRENTES",
+                    "conta_origem": "- OUTRAS RECEITAS CORRENTES",
+                    "especie": "- DEMAIS RECEITAS CORRENTES",
+                    "rubrica": "- OUTRAS RECEITAS CORRENTES",
+                    "alinea": "- OUTRAS RECEITAS",
+                    "subalinea": None,
+                    "fonte_recurso": "1100000 - GERAL",
+                    "receita": "Orçamentário",
+                    "origem": "Arrecadação",
+                    "valor_previsto": "1000",
+                    "valor_realizado": str(i * 10),
+                }
+            )
+        duplicado_legitimo = dict(linhas[0], valor_realizado="200")
+        linhas.extend([duplicado_legitimo, dict(duplicado_legitimo)])
+
+        limpas = deduplicar_receitas_gpi(linhas)
+        self.assertEqual(len(limpas), 11)
+
+
 if __name__ == "__main__":
     unittest.main()
