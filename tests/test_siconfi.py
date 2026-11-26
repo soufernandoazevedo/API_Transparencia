@@ -290,6 +290,56 @@ class TestDeduplicacaoReceitasGpi(unittest.TestCase):
         self.assertEqual(limpas[0]["valor_realizado"], "100.50")
         self.assertEqual(limpas[0]["subalinea"], "- Imposto sobre Serviços de Qualquer Natureza - ISSQN")
 
+    @staticmethod
+    def _linha_gpi(**extra):
+        base = {
+            "ano_ref": 2026, "mes_ref": 1, "unidade_gestora": "PREFEITURA MUNICIPAL DE SANTOS",
+            "data": "2026-01-30", "categoria": "- RECEITAS CORRENTES",
+            "conta_origem": "- TRANSFERÊNCIAS CORRENTES", "especie": "- Transferências da União",
+            "rubrica": "- Transferências do FUNDEB", "alinea": "- Complementação da União VAAR",
+            "subalinea": None, "fonte_recurso": "2620003 - FUNDEB", "receita": "Orçamentário",
+            "origem": "Arrecadação", "valor_previsto": "0", "valor_realizado": "1000.00",
+        }
+        base.update(extra)
+        return base
+
+    def test_preserva_lancamentos_legitimos_repetidos_em_caixa_mista(self) -> None:
+        from src.transformer import deduplicar_receitas_gpi
+
+        mista = self._linha_gpi()
+        limpas = deduplicar_receitas_gpi([mista, dict(mista)])
+        self.assertEqual(len(limpas), 2)
+
+    def test_par_legitimo_triplicado_mantem_duas_linhas(self) -> None:
+        from src.transformer import deduplicar_receitas_gpi
+
+        mista = self._linha_gpi()
+        maiuscula = self._linha_gpi(
+            especie="- TRANSFERÊNCIAS DA UNIÃO", rubrica="- TRANSFERÊNCIAS DO FUNDEB",
+            alinea="- COMPLEMENTAÇÃO DA UNIÃO VAAR",
+        )
+        linhas = [mista, dict(mista)] + [dict(maiuscula) for _ in range(4)]
+        self.assertEqual(len(deduplicar_receitas_gpi(linhas)), 2)
+
+    def test_subalineas_distintas_nao_colidem(self) -> None:
+        from src.transformer import deduplicar_receitas_gpi
+
+        a = self._linha_gpi(subalinea="- Sub A")
+        b = self._linha_gpi(subalinea="- Sub B")
+        self.assertEqual(len(deduplicar_receitas_gpi([a, b])), 2)
+
+    def test_dia_so_caixa_alta_duplicado_2x_colapsa_pelo_fator_do_dia(self) -> None:
+        from src.transformer import deduplicar_receitas_gpi
+
+        linhas = []
+        for i in range(1, 6):
+            l = self._linha_gpi(
+                especie="- X", rubrica="- Y", alinea="- Z", valor_realizado=str(i * 10)
+            )
+            linhas.extend([dict(l), dict(l)])
+        self.assertEqual(len(deduplicar_receitas_gpi(linhas)), 5)
+
+
     def test_nao_confunde_numero_de_conta_na_subalinea_com_codigo_nr(self) -> None:
         self.assertIsNone(extrair_codigo_nr("- AP (C) 01047 - AP DRAGAGEM RIO SAO JORGE"))
         res = classificar_receita_gpi(

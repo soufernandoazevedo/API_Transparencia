@@ -9,10 +9,12 @@
 -- 1. Receitas Orçamentárias do GPI (E&L) classificadas no padrão MCASP/STN
 --    - Separa Bruta, Deduções e Líquida para comparação direta com o SICONFI.
 --    - Exclui receitas Extra-Orçamentárias (que não compõem o balanço orçamentário).
---    - Deduplicação inteligente orientada por dia/unidade gestora:
---      quando >= 20% das chaves naturais do dia vêm repetidas (case-insensitive,
---      sinalizando recarga duplicada/triplicada na API do Portal), mantém apenas
---      1 linha confiável por chave; em dias limpos (< 20%), preserva todas as linhas.
+--    - Deduplicação por assinatura da cópia (carga clonada da API do Portal):
+--      cada lançamento real tem exatamente 1 cópia em caixa mista; as demais são clones
+--      em CAIXA ALTA. Mantêm-se todas as linhas em caixa mista (inclusive lançamentos
+--      legítimos repetidos no dia) e descartam-se as cópias CAIXA ALTA quando existe a
+--      cópia mista da mesma chave. Chaves só em CAIXA ALTA mantêm CEIL(n / fator_clone_dia),
+--      onde fator_clone_dia é a moda de cópias CAIXA ALTA no dia/UG (1 em dias limpos).
 -- ============================================================================
 CREATE OR REPLACE VIEW `SEU_PROJETO.transparencia_santos.vw_receitas_gpi_classificadas` AS
 WITH base_bruta AS (
@@ -33,74 +35,85 @@ WITH base_bruta AS (
     UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(alinea, ''), NFD), r'\pM|^[\s\-–—]+', '')) AS ali_norm,
     UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(subalinea, ''), NFD), r'\pM|^[\s\-–—]+', '')) AS sub_norm,
     valor_previsto,
-    valor_realizado
+    valor_realizado,
+    (REGEXP_CONTAINS(CONCAT(COALESCE(especie, ''), COALESCE(rubrica, ''), COALESCE(alinea, ''), COALESCE(subalinea, '')), r'\p{Ll}')
+      OR NOT REGEXP_CONTAINS(CONCAT(COALESCE(especie, ''), COALESCE(rubrica, ''), COALESCE(alinea, ''), COALESCE(subalinea, '')), r'\p{L}')) AS linha_caixa_mista
   FROM `SEU_PROJETO.transparencia_santos.receitas`
   WHERE COALESCE(TRIM(receita), '') != 'Extra Orçamentário'
 ),
-numerada AS (
+normalizada AS (
   SELECT
     *,
-    COUNT(*) OVER (
-      PARTITION BY
-        ano_ref, mes_ref, data,
-        TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(unidade_gestora, ''), NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')),
-        TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(fonte_recurso, NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')),
-        TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(receita, ''), NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')),
-        TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(origem, ''), NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')),
-        TRIM(REGEXP_REPLACE(cat_norm, r'[^A-Z0-9]+', ' ')),
-        TRIM(REGEXP_REPLACE(orig_norm, r'[^A-Z0-9]+', ' ')),
-        TRIM(REGEXP_REPLACE(esp_norm, r'[^A-Z0-9]+', ' ')),
-        TRIM(REGEXP_REPLACE(rub_norm, r'[^A-Z0-9]+', ' ')),
-        TRIM(REGEXP_REPLACE(ali_norm, r'[^A-Z0-9]+', ' ')),
-        valor_previsto, valor_realizado
-    ) AS qtd_copias_api,
-    ROW_NUMBER() OVER (
-      PARTITION BY
-        ano_ref, mes_ref, data,
-        TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(unidade_gestora, ''), NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')),
-        TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(fonte_recurso, NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')),
-        TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(receita, ''), NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')),
-        TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(origem, ''), NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')),
-        TRIM(REGEXP_REPLACE(cat_norm, r'[^A-Z0-9]+', ' ')),
-        TRIM(REGEXP_REPLACE(orig_norm, r'[^A-Z0-9]+', ' ')),
-        TRIM(REGEXP_REPLACE(esp_norm, r'[^A-Z0-9]+', ' ')),
-        TRIM(REGEXP_REPLACE(rub_norm, r'[^A-Z0-9]+', ' ')),
-        TRIM(REGEXP_REPLACE(ali_norm, r'[^A-Z0-9]+', ' ')),
-        valor_previsto, valor_realizado
-      ORDER BY IF(sub_norm != '', 0, 1), data
-    ) AS rn_chave
+    TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(unidade_gestora, ''), NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')) AS ug_k,
+    TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(fonte_recurso, NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')) AS fonte_k,
+    TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(receita, ''), NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')) AS receita_k,
+    TRIM(REGEXP_REPLACE(UPPER(REGEXP_REPLACE(NORMALIZE(COALESCE(origem, ''), NFD), r'\pM', '')), r'[^A-Z0-9]+', ' ')) AS origem_k,
+    TRIM(REGEXP_REPLACE(cat_norm, r'[^A-Z0-9]+', ' ')) AS cat_k,
+    TRIM(REGEXP_REPLACE(orig_norm, r'[^A-Z0-9]+', ' ')) AS orig_k,
+    TRIM(REGEXP_REPLACE(esp_norm, r'[^A-Z0-9]+', ' ')) AS esp_k,
+    TRIM(REGEXP_REPLACE(rub_norm, r'[^A-Z0-9]+', ' ')) AS rub_k,
+    TRIM(REGEXP_REPLACE(ali_norm, r'[^A-Z0-9]+', ' ')) AS ali_k
   FROM base_bruta
 ),
-diagnostico_dia AS (
+chaveada AS (
   SELECT
-    ano_ref,
-    data,
-    unidade_gestora,
-    SAFE_DIVIDE(
-      COUNTIF(rn_chave = 1 AND qtd_copias_api > 1),
-      COUNTIF(rn_chave = 1)
-    ) >= 0.20 AS dia_com_duplicidade_api
-  FROM numerada
-  GROUP BY 1, 2, 3
+    *,
+    -- Chave natural SEM subalínea (as cópias CAIXA ALTA vêm sem subalínea); inclui valores.
+    TO_JSON_STRING(STRUCT(ano_ref, mes_ref, data, ug_k, fonte_k, receita_k, origem_k,
+                          cat_k, orig_k, esp_k, rub_k, ali_k, valor_previsto, valor_realizado)) AS chave_natural
+  FROM normalizada
+),
+contada AS (
+  SELECT
+    *,
+    COUNTIF(linha_caixa_mista) OVER (PARTITION BY chave_natural) AS qtd_copias_mista,
+    COUNTIF(NOT linha_caixa_mista) OVER (PARTITION BY chave_natural) AS qtd_copias_maiuscula,
+    ROW_NUMBER() OVER (PARTITION BY chave_natural, linha_caixa_mista ORDER BY sub_norm) AS rn_na_assinatura
+  FROM chaveada
+),
+chaves_maiuscula AS (
+  SELECT DISTINCT ano_ref, data, ug_k, chave_natural, qtd_copias_maiuscula
+  FROM contada
+  WHERE qtd_copias_maiuscula > 0
+),
+moda_dia AS (
+  SELECT
+    ano_ref, data, ug_k,
+    qtd_copias_maiuscula AS moda,
+    q / total AS participacao
+  FROM (
+    SELECT
+      ano_ref, data, ug_k, qtd_copias_maiuscula,
+      COUNT(*) AS q,
+      SUM(COUNT(*)) OVER (PARTITION BY ano_ref, data, ug_k) AS total
+    FROM chaves_maiuscula
+    GROUP BY 1, 2, 3, 4
+  )
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY ano_ref, data, ug_k ORDER BY q DESC, qtd_copias_maiuscula ASC) = 1
 ),
 base AS (
   SELECT
-    n.*,
-    COALESCE(d.dia_com_duplicidade_api, FALSE) AS dia_com_duplicidade_api
-  FROM numerada n
-  LEFT JOIN diagnostico_dia d
-    ON n.ano_ref = d.ano_ref
-   AND n.data = d.data
-   AND COALESCE(n.unidade_gestora, '') = COALESCE(d.unidade_gestora, '')
-  WHERE NOT COALESCE(d.dia_com_duplicidade_api, FALSE)
-     OR n.rn_chave = 1
+    c.*,
+    IF(COALESCE(m.participacao, 0) >= 0.5, COALESCE(m.moda, 1), 1) AS fator_clone_dia
+  FROM contada c
+  LEFT JOIN moda_dia m
+    ON c.ano_ref = m.ano_ref AND c.data = m.data AND c.ug_k = m.ug_k
+),
+filtrada AS (
+  SELECT
+    *,
+    (qtd_copias_mista > 0 AND qtd_copias_maiuscula > 0) OR qtd_copias_maiuscula > 1 AS dia_com_duplicidade_api,
+    (qtd_copias_mista + qtd_copias_maiuscula) AS qtd_copias_api
+  FROM base
+  WHERE linha_caixa_mista
+     OR (qtd_copias_mista = 0 AND rn_na_assinatura <= CEIL(qtd_copias_maiuscula / fator_clone_dia))
 ),
 enriquecida AS (
   SELECT
     *,
     CONCAT(cat_norm, ' | ', orig_norm, ' | ', esp_norm, ' | ', rub_norm, ' | ', ali_norm, ' | ', sub_norm) AS texto_completo,
     (CONTAINS_SUBSTR(cat_norm, 'INTRA') OR CONTAINS_SUBSTR(orig_norm, 'INTRA') OR CONTAINS_SUBSTR(esp_norm, 'INTRA')) AS eh_intra_orcamentaria
-  FROM base
+  FROM filtrada
 )
 SELECT
   ano_ref,
@@ -110,6 +123,10 @@ SELECT
   eh_intra_orcamentaria,
   dia_com_duplicidade_api,
   qtd_copias_api,
+  qtd_copias_mista,
+  qtd_copias_maiuscula,
+  fator_clone_dia,
+  linha_caixa_mista,
 
   -- Grupo gerencial (Tributárias e Patrimoniais reunidas conforme demanda)
   CASE

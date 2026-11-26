@@ -111,47 +111,64 @@ def _normalizar_chave_texto(valor: Any) -> Any:
 
 
 def _chave_natural_receita_gpi(row: dict[str, Any]) -> tuple[Any, ...]:
-    """Gera chave natural normalizada para identificar cópias redundantes em receitas do GPI.
+    """Gera chave natural normalizada (sem ``subalinea``) para agrupar cópias de um lançamento.
 
-    Omite ``subalinea`` da chave porque cargas duplicadas da API do Portal de Santos
-    emitem cópias idênticas alternando ``subalinea=None`` e ``subalinea`` preenchida,
-    além de variações de caixa, espaços duplos e hífens ('-' vs '–').
+    ``subalinea`` fica de fora porque as cópias em CAIXA ALTA da API do Portal de Santos
+    vêm sem subalínea; os lançamentos reais são distinguidos pela cópia em caixa mista.
     """
     return tuple(_normalizar_chave_texto(row.get(campo)) for campo in _CAMPOS_CHAVE_RECEITA_GPI)
 
 
+def _linha_em_caixa_mista(row: dict[str, Any]) -> bool:
+    """Retorna True se a linha traz a cópia em caixa mista (ou sem letras), que é a cópia 1:1 do lançamento real."""
+    texto = "".join(str(row.get(c) or "") for c in ("especie", "rubrica", "alinea", "subalinea"))
+    letras = [ch for ch in texto if ch.isalpha()]
+    if not letras:
+        return True
+    return any(ch.islower() for ch in letras)
+
+
 def deduplicar_receitas_gpi(
     records: list[dict[str, Any]],
-    limiar_taxa_duplicidade: float = 0.20,
+    limiar_participacao_moda: float = 0.5,
 ) -> list[dict[str, Any]]:
-    """Remove cópias redundantes de dias afetados por carga duplicada na API do GPI.
+    """Remove cópias clonadas da API do GPI preservando lançamentos legítimos repetidos.
 
-    Para cada grupo ``(ano_ref, data, unidade_gestora)``, calcula a proporção de chaves
-    naturais repetidas (case-insensitive). Quando a taxa atinge ``limiar_taxa_duplicidade``
-    (indicando duplicação/triplicação de carga na API), mantém apenas a linha mais completa
-    (priorizando a cópia com ``subalinea`` preenchida); em dias limpos, preserva tudo.
+    Diagnóstico: em jan–mai/2026 a API devolve cada lançamento 3× (1 cópia em caixa mista
+    + 2 em CAIXA ALTA, sem subalínea). Regras:
+
+    1. Toda linha em caixa mista é mantida (cada lançamento real tem exatamente 1 cópia mista,
+       então pares legítimos idênticos no mesmo dia não são perdidos).
+    2. Cópias CAIXA ALTA são descartadas quando a mesma chave possui cópia mista.
+    3. Chaves só em CAIXA ALTA mantêm ``ceil(n / fator_clone_dia)``, em que ``fator_clone_dia``
+       é a moda de cópias CAIXA ALTA por chave no dia/UG (se ela cobre ao menos
+       ``limiar_participacao_moda`` das chaves; senão 1 = dia limpo, preserva tudo).
     """
-    por_dia_ug: dict[tuple[Any, Any, Any], list[dict[str, Any]]] = defaultdict(list)
+    por_chave: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
     for row in records:
-        chave_dia = (row.get("ano_ref"), row.get("data"), row.get("unidade_gestora"))
-        por_dia_ug[chave_dia].append(row)
+        por_chave[_chave_natural_receita_gpi(row)].append(row)
+
+    # Distribuição de cópias CAIXA ALTA por (ano, data, UG).
+    dist_dia: dict[tuple[Any, Any, Any], Counter] = defaultdict(Counter)
+    for rows in por_chave.values():
+        n_maiusc = sum(1 for r in rows if not _linha_em_caixa_mista(r))
+        if n_maiusc:
+            r0 = rows[0]
+            dist_dia[(r0.get("ano_ref"), r0.get("data"), _normalizar_chave_texto(r0.get("unidade_gestora")))][n_maiusc] += 1
+
+    fator_dia: dict[tuple[Any, Any, Any], int] = {}
+    for chave_dia, cont in dist_dia.items():
+        total = sum(cont.values())
+        moda, q = sorted(cont.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+        fator_dia[chave_dia] = moda if q / total >= limiar_participacao_moda else 1
 
     resultado: list[dict[str, Any]] = []
-    for rows in por_dia_ug.values():
-        contagem = Counter(_chave_natural_receita_gpi(r) for r in rows)
-        total_chaves = len(contagem)
-        chaves_repetidas = sum(1 for qtd in contagem.values() if qtd > 1)
-        taxa = chaves_repetidas / total_chaves if total_chaves else 0.0
-
-        if taxa >= limiar_taxa_duplicidade:
-            escolhidas: dict[tuple[Any, ...], dict[str, Any]] = {}
-            for r in rows:
-                ch = _chave_natural_receita_gpi(r)
-                anterior = escolhidas.get(ch)
-                if anterior is None or (not anterior.get("subalinea") and r.get("subalinea")):
-                    escolhidas[ch] = r
-            resultado.extend(escolhidas.values())
-        else:
-            resultado.extend(rows)
-
+    for rows in por_chave.values():
+        mistas = [r for r in rows if _linha_em_caixa_mista(r)]
+        maiusc = [r for r in rows if not _linha_em_caixa_mista(r)]
+        resultado.extend(mistas)
+        if maiusc and not mistas:
+            r0 = maiusc[0]
+            fator = fator_dia.get((r0.get("ano_ref"), r0.get("data"), _normalizar_chave_texto(r0.get("unidade_gestora"))), 1)
+            resultado.extend(maiusc[: -(-len(maiusc) // fator)])
     return resultado
